@@ -31,15 +31,14 @@ venv/
 .venv/
 env/
 
-# Django
-*.log
-local_settings.py
-db.sqlite3
-media/
-staticfiles/
-
 # IDE
 .idea/
 .vscode/
 *.swp
 *.swo
+
+# Test / build artifacts
+.pytest_cache/
+.ruff_cache/
+htmlcov/
+.coverage

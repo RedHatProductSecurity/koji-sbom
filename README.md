@@ -1,86 +1,85 @@
-# Koji SBOM Microservice
+# koji-sbom
 
-Django microservice that fetches product definitions for RHEL 6/7/8 active streams, scrapes errata and YUM data into a local database, and exposes an API with status, streams, and on-demand SBOM generation.
+Stdlib-only Python library for metadata-only RPM SPDX SBOM generation from Koji hub builds. No SRPM download, no Syft, no database.
 
-## Features
 
-- **Active streams**: rhel-8.2.0.z, rhel-8.4.0.z, rhel-8.6.0.z, rhel-8.8.0.z, rhel-8.10.z, rhel-7-els, rhel-6-els
-- **Data sources**: errata_info and yum_repositories from product-definitions
-- **Koji listRPMs**: Fetches SRPM + all binary RPMs per build
-- **SPDX 2.3 SBOM**: Per security-data-guidelines (SRPM + binary RPMs, GENERATED_FROM relationships)
+## Install
 
-## Setup
+```bash
+pip install git+https://github.com/RedHatProductSecurity/koji-sbom@v0.1.0
+```
+
+For development:
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate  # or .venv\Scripts\activate on Windows
-pip install -r requirements.txt
-cp .env.example .env
-# Edit .env with your configuration
-python manage.py migrate
+source .venv/bin/activate
+pip install -e ".[dev]"
 ```
 
-## Environment Variables
+## CLI
+
+Generate an SPDX 2.3 SBOM for one build and print it to stdout:
+
+```bash
+koji-sbom openssl-4.0.2-1.fc46 > openssl-rpm-sbom.json
+```
+
+Fedora Koji defaults when `--namespace fedora` and no hub URL is configured:
+
+```bash
+koji-sbom --namespace fedora bash-5.3.15-2.fc45
+```
+
+Write to a file instead of stdout:
+
+```bash
+koji-sbom openssl-4.0.2-1.fc46 --output openssl-rpm-sbom.json
+```
+
+The same entry point is also available as `koji-sbom-generate` and via `python -m koji_sbom`.
+
+Environment variables:
 
 | Variable | Description |
 |----------|-------------|
-| `PRODUCT_DEFINITIONS_URL` | URL to products.json (default: prodsec.pages.redhat.com) |
-| `ERRATA_TOOL_URL` | Errata Tool API base URL (GSSAPI/Kerberos auth) |
-| `KOJI_URL` | Koji/Brew hub URL |
-| `KOJI_AUTH_TOKEN` | Optional; for authenticated Koji access |
-| `YUM_REPO_BASE_URL` | Override for internal URLs (e.g. cdn.redhat.com) |
-| `DATABASE_URL` | SQLite or PostgreSQL connection string |
+| `KOJI_URL` | Koji/Brew hub URL (preferred) |
+| `KOJI_HUB` | Alternate hub URL variable |
 
-Secrets and `.env` are gitignored. Do not commit credentials.
+## Library API
 
-## Management Commands
+```python
+from koji_sbom.generate import generate_sbom
 
-### scrape_errata
-
-Fetches shipped errata for streams with errata_info, then builds and RPMs from Koji.
-
-```bash
-python manage.py scrape_errata
+sbom = generate_sbom("https://koji.fedoraproject.org/kojihub", nvr="openssl-4.0.2-1.fc46")
 ```
 
-### scrape_yum
+Key modules:
 
-Fetches repodata from yum_repositories, parses primary.xml, and optionally enriches with Koji listRPMs.
+- `koji_sbom.generate` — SBOM generation and CLI entry point
+- `koji_sbom.koji_session` — Koji XML-RPC client with retry and multicall helpers
+- `koji_sbom.assembly` — SPDX 2.3 document assembly
+- `koji_sbom.sbom_io` — read document NVR from on-disk SPDX/CycloneDX files
+- `koji_sbom.buildmeta` — RPM build-metadata sidecar read/write (including Fedora Koji writer)
 
-```bash
-python manage.py scrape_yum
-```
+## SBOM format
 
-## Daily Schedule
+Follows [Red Hat security-data-guidelines](https://github.com/RedHatProductSecurity/security-data-guidelines):
 
-Run scrapers on a schedule (cron, systemd timer, or celery-beat):
+- SRPM as root package with `arch=src` in PURL
+- Binary RPM subpackages with `GENERATED_FROM` relationship to SRPM
+- Bundled/golang/python provides from Koji `Provides`
+- PURL format: `pkg:rpm/{namespace}/{name}@{version}-{release}?arch={arch}`
 
-```bash
-# Example crontab (daily at 2am)
-0 2 * * * cd /path/to/koji-sbom && .venv/bin/python manage.py scrape_errata
-0 3 * * * cd /path/to/koji-sbom && .venv/bin/python manage.py scrape_yum
-```
-
-## API Endpoints
-
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/v1/status` | Health, DB connectivity, last scrape times |
-| GET | `/api/v1/streams` | List active streams with build counts |
-| GET | `/api/v1/sbom/{stream}` | Generate SPDX 2.3 JSON SBOM for stream |
-
-## Run Server
+## Development
 
 ```bash
-python manage.py runserver 0.0.0.0:8000
-# or with gunicorn:
-gunicorn config.wsgi:application -b 0.0.0.0:8000
+ruff format koji_sbom/ tests/
+ruff check --fix koji_sbom/ tests/
+pytest tests/ -v --tb=short
+python -m build   # local smoke only
 ```
 
-## SBOM Format
+## License
 
-Follows [security-data-guidelines](https://github.com/RedHatProductSecurity/security-data-guidelines):
-
-- SRPM as separate package with `arch=src` in purl
-- Binary RPMs with `GENERATED_FROM` relationship to SRPM
-- PURL format: `pkg:rpm/redhat/{name}@{version}-{release}?arch={arch}`
+Apache License 2.0 — see [LICENSE](LICENSE).
