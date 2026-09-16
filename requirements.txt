@@ -1,9 +1,0 @@
-Django>=4.2,<6
-django-environ>=0.11.0
-requests>=2.28.0
-requests-gssapi>=1.2.0
-koji>=1.35.0
-defusedxml>=0.7.0
-djangorestframework>=3.14.0
-gunicorn>=21.0.0
-psycopg2-binary>=2.9.0
