@@ -44,7 +44,12 @@ def github_owner_repo(url: str) -> tuple[str, str] | None:
 
 
 def bundled_purls(dep: BundledDep) -> list[str]:
-    """Return one or more purls for a bundled dependency."""
+    """Return PURLs for a bundled dependency, preserving its RPM Provide identity.
+
+    The first PURL is always derived from the RPM's virtual Provide.  Source-tree
+    enrichment may add an upstream GitHub PURL as supplemental provenance, but it
+    must not replace the identity declared by the shipped RPM.
+    """
     ver = f"@{dep.version}" if dep.version else ""
     purl_type = LANG_TO_PURL_TYPE.get(dep.lang, "generic")
 
@@ -59,33 +64,22 @@ def bundled_purls(dep: BundledDep) -> list[str]:
             return [f"{base}?{'&'.join(qualifiers)}"]
         return [base]
 
-    github_coords = github_owner_repo(dep.vcs_url) or github_owner_repo(dep.download_url)
-    non_github_vcs = dep.vcs_url if dep.vcs_url and not github_owner_repo(dep.vcs_url) else ""
-    non_github_download = (
-        dep.download_url if dep.download_url and not github_owner_repo(dep.download_url) else ""
-    )
-
-    if github_coords:
-        owner, repo = github_coords
-        purls = [f"pkg:github/{owner}/{repo}{ver}"]
-        generic_quals: list[str] = []
-        if non_github_vcs:
-            generic_quals.append(f"vcs_url={quote(non_github_vcs, safe='')}")
-        if non_github_download:
-            generic_quals.append(f"download_url={quote(non_github_download, safe='')}")
-        if generic_quals:
-            purls.append(f"pkg:generic/{dep.path}{ver}?{'&'.join(generic_quals)}")
-        return purls
-
+    # A generic bundled provide is the authoritative identity. Retain its
+    # generic name and type (for example bundled(expat)) while qualifying it
+    # with any source-tree provenance discovered by the caller.
     base = f"pkg:generic/{dep.path}{ver}"
     qualifiers: list[str] = []
     if dep.vcs_url:
         qualifiers.append(f"vcs_url={quote(dep.vcs_url, safe='')}")
     if dep.download_url:
         qualifiers.append(f"download_url={quote(dep.download_url, safe='')}")
-    if qualifiers:
-        return [f"{base}?{'&'.join(qualifiers)}"]
-    return [base]
+    purls = [f"{base}?{'&'.join(qualifiers)}" if qualifiers else base]
+
+    github_coords = github_owner_repo(dep.vcs_url) or github_owner_repo(dep.download_url)
+    if github_coords:
+        owner, repo = github_coords
+        purls.append(f"pkg:github/{owner}/{repo}{ver}")
+    return purls
 
 
 def bundled_purl(dep: BundledDep) -> str:
@@ -94,24 +88,13 @@ def bundled_purl(dep: BundledDep) -> str:
 
 
 def bundled_display_lang(dep: BundledDep) -> str:
-    """Language label for SPDX ``name`` when provenance implies a GitHub repo."""
-    if dep.lang != "generic":
-        return dep.lang
-    if github_owner_repo(dep.vcs_url) or github_owner_repo(dep.download_url):
-        return "github"
+    """Language label for an SPDX package name."""
     return dep.lang
 
 
 def bundled_display_name(dep: BundledDep) -> str:
-    """Package name for SPDX; uses ``owner/repo`` for GitHub-backed generic deps."""
-    if bundled_display_lang(dep) == "github":
-        coords = github_owner_repo(dep.vcs_url) or github_owner_repo(dep.download_url)
-        if coords:
-            label = f"{coords[0]}/{coords[1]}"
-        else:
-            label = dep.path
-    else:
-        label = dep.path
+    """Package name for SPDX, based on the original RPM virtual Provide."""
+    label = dep.path
     lang = bundled_display_lang(dep)
     name = f"{label} ({lang})"
     if dep.version:

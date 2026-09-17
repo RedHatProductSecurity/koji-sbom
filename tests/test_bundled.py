@@ -72,3 +72,18 @@ def test_bundled_libvterm_spdx_shape_from_guidelines() -> None:
     assert rel["spdxElementId"] == pkg["SPDXID"]
     assert rel["relationshipType"] == "DEPENDENCY_OF"
     assert rel["relatedSpdxElement"] == "SPDXRef-SRPM"
+
+
+def test_github_provenance_preserves_generic_provide_identity() -> None:
+    """Source provenance supplements, but never replaces, bundled(foo)."""
+    dep = RpmDep("bundled(expat)", "", 1)
+    bundled = bundled_golang_from_provides([dep])
+    bundled[0].vcs_url = "git+https://github.com/libexpat/libexpat"
+
+    packages, _ = bundled_provides_to_spdx_fragments(bundled, srpm_spdx_id="SPDXRef-SRPM")
+
+    assert packages[0]["name"] == "expat (generic)"
+    assert [ref["referenceLocator"] for ref in packages[0]["externalRefs"]] == [
+        "pkg:generic/expat?vcs_url=git%2Bhttps%3A%2F%2Fgithub.com%2Flibexpat%2Flibexpat",
+        "pkg:github/libexpat/libexpat",
+    ]
