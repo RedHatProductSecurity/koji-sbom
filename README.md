@@ -6,7 +6,7 @@ Stdlib-only Python library for metadata-only RPM SPDX SBOM generation from Koji 
 ## Install
 
 ```bash
-pip install git+https://github.com/RedHatProductSecurity/koji-sbom@v0.1.0
+pip install git+https://github.com/RedHatProductSecurity/koji-sbom@v0.1.1
 ```
 
 For development:
