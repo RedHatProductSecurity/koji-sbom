@@ -11,6 +11,11 @@ from pathlib import Path
 from typing import Any
 
 from koji_sbom.assembly import assemble_rpm_spdx_document
+from koji_sbom.bodhi import (
+    looks_like_rpm_nvr,
+    lookup_package_stream_nvrs,
+    resolve_newer_epel_nvr,
+)
 from koji_sbom.bundled import (
     bundled_golang_from_provides,
     bundled_provides_to_spdx_fragments,
@@ -108,14 +113,28 @@ def main(argv: list[str] | None = None) -> int:
         "nvr",
         nargs="?",
         metavar="NVR",
-        help="Source NVR (SPDX JSON written to stdout unless --output is set)",
+        help="Source NVR (same as --nvr)",
     )
     parser.add_argument(
         "--koji-url",
         default=None,
         help="Koji hub URL (default: KOJI_HUB/KOJI_URL, else Fedora Koji)",
     )
-    parser.add_argument("--nvr", dest="nvr_flag", help="Source NVR (same as positional NVR)")
+    parser.add_argument(
+        "--nvr",
+        dest="nvr_flag",
+        help=(
+            "Source NVR. Write SPDX JSON for this build and warn when Bodhi "
+            "has a newer NVR for the same package"
+        ),
+    )
+    parser.add_argument(
+        "--package",
+        help=(
+            "Bare package name. Print the latest NVR on fedora-all and each "
+            "current epel-N (no SBOM)"
+        ),
+    )
     parser.add_argument("--build-id", type=int, help="Koji build id (instead of NVR)")
     parser.add_argument(
         "--namespace",
@@ -125,7 +144,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--output",
         type=Path,
-        help="Write SPDX JSON to this path",
+        help="Write SPDX JSON to this path (--nvr or --build-id only)",
+    )
+    parser.add_argument(
+        "--no-bodhi",
+        action="store_true",
+        help=("Skip Bodhi pending/testing lookup (exact NVR, or Koji tags only for --package)"),
     )
     parser.add_argument(
         "-v",
@@ -135,24 +159,66 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    selectors = (args.nvr, args.nvr_flag, args.package, args.build_id)
+    if sum(value is not None for value in selectors) != 1:
+        parser.error("provide exactly one of NVR, --nvr, --package, or --build-id")
+
     nvr = args.nvr or args.nvr_flag
     build_id = args.build_id
-    if (nvr is None) == (build_id is None):
-        parser.error("provide exactly one of NVR or --build-id")
-
     koji_url = resolve_koji_hub(args.koji_url)
+
+    if args.package is not None:
+        if looks_like_rpm_nvr(args.package):
+            parser.error("--package expects a bare package name; use --nvr for an NVR")
+        if args.output is not None:
+            print("error: --output is only valid with an NVR or --build-id", file=sys.stderr)
+            return 2
+        try:
+            streams = lookup_package_stream_nvrs(
+                args.package,
+                koji_url,
+                use_bodhi=not args.no_bodhi,
+            )
+        except RuntimeError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        if args.verbose:
+            print(f"koji hub: {koji_url}", file=sys.stderr)
+            print(f"package lookup: {args.package}", file=sys.stderr)
+        found = False
+        for stream_id, stream_nvr in streams.items():
+            value = stream_nvr if stream_nvr else "-"
+            if stream_nvr:
+                found = True
+            print(f"{stream_id}: {value}")
+        return 0 if found else 1
+
+    if nvr is not None and not looks_like_rpm_nvr(nvr):
+        parser.error(f"{nvr!r} is not an NVR; use --package to list latest NVRs")
+
+    if nvr is not None and not args.no_bodhi:
+        resolved = resolve_newer_epel_nvr(nvr)
+        if resolved != nvr:
+            print(
+                f"warning: a newer build exists in Bodhi: {nvr} → {resolved}",
+                file=sys.stderr,
+            )
 
     build_target = nvr if nvr is not None else f"build_id={build_id}"
     if args.verbose:
         print(f"koji hub: {koji_url}", file=sys.stderr)
         print(f"fetching: {build_target}", file=sys.stderr)
 
-    sbom = generate_sbom(
-        koji_url,
-        nvr=nvr,
-        build_id=build_id,
-        namespace=args.namespace,
-    )
+    try:
+        sbom = generate_sbom(
+            koji_url,
+            nvr=nvr,
+            build_id=build_id,
+            namespace=args.namespace,
+        )
+    except LookupError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
 
     if args.output:
         write_sbom_outputs(sbom, args.output)
