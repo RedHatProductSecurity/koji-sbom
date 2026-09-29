@@ -71,7 +71,7 @@ def test_generate_sbom_produces_rhel_shaped_document(
     assert sbom["spdxVersion"] == "SPDX-2.3"
     assert sbom["name"] == "openssl-3.2.2-1.el10"
     assert sbom["documentDescribes"] == ["SPDXRef-SRPM"]
-    assert sbom["creationInfo"]["creators"] == ["Tool: koji-sbom-0.1.1"]
+    assert sbom["creationInfo"]["creators"] == ["Tool: koji-sbom-0.1.2"]
     assert sbom["creationInfo"]["created"].endswith("Z")
 
     pkg_ids = {p["SPDXID"] for p in sbom["packages"]}

@@ -114,6 +114,8 @@ Follows [Red Hat security-data-guidelines](https://github.com/RedHatProductSecur
 
 ## Development
 
+Version bumps are described in [DEVELOP.md](DEVELOP.md).
+
 ```bash
 ruff format koji_sbom/ tests/
 ruff check --fix koji_sbom/ tests/
