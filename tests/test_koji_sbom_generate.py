@@ -71,7 +71,7 @@ def test_generate_sbom_produces_rhel_shaped_document(
     assert sbom["spdxVersion"] == "SPDX-2.3"
     assert sbom["name"] == "openssl-3.2.2-1.el10"
     assert sbom["documentDescribes"] == ["SPDXRef-SRPM"]
-    assert sbom["creationInfo"]["creators"] == ["Tool: koji-sbom-0.1.1"]
+    assert sbom["creationInfo"]["creators"] == ["Tool: koji-sbom-0.1.2"]
     assert sbom["creationInfo"]["created"].endswith("Z")
 
     pkg_ids = {p["SPDXID"] for p in sbom["packages"]}
@@ -223,9 +223,11 @@ def test_resolve_koji_hub_prefers_flag_and_env(
     assert resolve_koji_hub() == "https://hub.example/kojihub"
 
 
+@patch("koji_sbom.generate.resolve_newer_epel_nvr", side_effect=lambda nvr: nvr)
 @patch("koji_sbom.generate.generate_sbom")
 def test_main_defaults_to_fedora_koji(
     mock_generate: MagicMock,
+    _mock_bodhi: MagicMock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("KOJI_URL", raising=False)
@@ -255,9 +257,11 @@ def test_koji_hub_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert koji_hub_from_env() == "https://hub.example/kojihub"
 
 
+@patch("koji_sbom.generate.resolve_newer_epel_nvr", side_effect=lambda nvr: nvr)
 @patch("koji_sbom.generate.generate_sbom")
 def test_main_positional_nvr_writes_stdout(
     mock_generate: MagicMock,
+    _mock_bodhi: MagicMock,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -277,9 +281,11 @@ def test_main_positional_nvr_writes_stdout(
     assert json.loads(out)["name"] == "openssl-3.2.2-1.el10"
 
 
+@patch("koji_sbom.generate.resolve_newer_epel_nvr", side_effect=lambda nvr: nvr)
 @patch("koji_sbom.generate.generate_sbom")
 def test_main_verbose_prints_hub_url_to_stderr(
     mock_generate: MagicMock,
+    _mock_bodhi: MagicMock,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     mock_generate.return_value = {"spdxVersion": "SPDX-2.3", "name": "openssl-3.2.2-1.el10"}
@@ -301,11 +307,13 @@ def test_main_verbose_prints_hub_url_to_stderr(
     assert json.loads(captured.out)["name"] == "openssl-3.2.2-1.el10"
 
 
+@patch("koji_sbom.generate.resolve_newer_epel_nvr", side_effect=lambda nvr: nvr)
 @patch("koji_sbom.generate.generate_sbom")
 @patch("koji_sbom.generate.KojiClient")
 def test_main_uses_koji_url_from_env(
     mock_client_cls: MagicMock,
     mock_generate: MagicMock,
+    _mock_bodhi: MagicMock,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -329,3 +337,139 @@ def test_main_uses_koji_url_from_env(
         build_id=None,
         namespace=FEDORA,
     )
+
+
+@patch("koji_sbom.generate.generate_sbom")
+@patch(
+    "koji_sbom.generate.resolve_newer_epel_nvr",
+    return_value="libheif-1.23.5-4.el10_4",
+)
+def test_main_warns_when_bodhi_has_newer_but_keeps_requested_nvr(
+    mock_bodhi: MagicMock,
+    mock_generate: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("KOJI_HUB", "https://kojihub.example/kojihub")
+    mock_generate.return_value = {
+        "spdxVersion": "SPDX-2.3",
+        "name": "libheif-1.20.2-6.el10_4",
+    }
+
+    rc = main(["libheif-1.20.2-6.el10_4"])
+
+    assert rc == 0
+    mock_bodhi.assert_called_once_with("libheif-1.20.2-6.el10_4")
+    mock_generate.assert_called_once_with(
+        "https://kojihub.example/kojihub",
+        nvr="libheif-1.20.2-6.el10_4",
+        build_id=None,
+        namespace=FEDORA,
+    )
+    err = capsys.readouterr().err
+    assert "warning: a newer build exists in Bodhi" in err
+    assert "libheif-1.20.2-6.el10_4 → libheif-1.23.5-4.el10_4" in err
+
+
+@patch("koji_sbom.generate.resolve_newer_epel_nvr")
+@patch("koji_sbom.generate.generate_sbom")
+def test_main_no_bodhi_skips_lookup(
+    mock_generate: MagicMock,
+    mock_bodhi: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("KOJI_HUB", "https://kojihub.example/kojihub")
+    mock_generate.return_value = {
+        "spdxVersion": "SPDX-2.3",
+        "name": "libheif-1.20.2-6.el10_4",
+    }
+
+    rc = main(["--no-bodhi", "libheif-1.20.2-6.el10_4"])
+
+    assert rc == 0
+    mock_bodhi.assert_not_called()
+    mock_generate.assert_called_once_with(
+        "https://kojihub.example/kojihub",
+        nvr="libheif-1.20.2-6.el10_4",
+        build_id=None,
+        namespace=FEDORA,
+    )
+    assert capsys.readouterr().err == ""
+
+
+@patch("koji_sbom.generate.generate_sbom")
+@patch(
+    "koji_sbom.generate.lookup_package_stream_nvrs",
+    return_value={
+        "fedora-all": "libheif-1.23.5-4.fc46",
+        "epel-8": "libheif-1.15.1-1.el8",
+        "epel-9": "libheif-1.16.1-2.el9",
+        "epel-10": "libheif-1.23.5-4.el10_4",
+    },
+)
+def test_main_package_flag_prints_stream_nvrs(
+    mock_lookup: MagicMock,
+    mock_generate: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("KOJI_HUB", "https://kojihub.example/kojihub")
+
+    rc = main(["--package", "libheif"])
+
+    assert rc == 0
+    mock_lookup.assert_called_once_with(
+        "libheif",
+        "https://kojihub.example/kojihub",
+        use_bodhi=True,
+    )
+    mock_generate.assert_not_called()
+    assert capsys.readouterr().out == (
+        "fedora-all: libheif-1.23.5-4.fc46\n"
+        "epel-8: libheif-1.15.1-1.el8\n"
+        "epel-9: libheif-1.16.1-2.el9\n"
+        "epel-10: libheif-1.23.5-4.el10_4\n"
+    )
+
+
+@patch("koji_sbom.generate.generate_sbom")
+@patch(
+    "koji_sbom.generate.lookup_package_stream_nvrs",
+    return_value={
+        "fedora-all": "libheif-1.23.5-4.fc46",
+        "epel-8": "libheif-1.15.1-1.el8",
+        "epel-9": "libheif-1.16.1-2.el9",
+        "epel-10": "libheif-1.20.2-6.el10_4",
+    },
+)
+def test_main_package_flag_no_bodhi(
+    mock_lookup: MagicMock,
+    mock_generate: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("KOJI_HUB", "https://kojihub.example/kojihub")
+
+    rc = main(["--no-bodhi", "--package", "libheif"])
+
+    assert rc == 0
+    mock_lookup.assert_called_once_with(
+        "libheif",
+        "https://kojihub.example/kojihub",
+        use_bodhi=False,
+    )
+    mock_generate.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--nvr", "libheif"],
+        ["libheif"],
+        ["--package", "libheif-1.20.2-6.el10_4"],
+    ],
+)
+def test_main_rejects_package_and_nvr_on_the_wrong_flag(argv: list[str]) -> None:
+    with pytest.raises(SystemExit) as exc:
+        main(argv)
+    assert exc.value.code == 2

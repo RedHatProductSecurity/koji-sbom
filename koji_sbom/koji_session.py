@@ -116,19 +116,23 @@ class KojiClient:
         *,
         latest: bool = True,
         inherit: bool = True,
+        package: str | None = None,
     ) -> list[dict[str, Any]]:
         """
-        ``listTagged(tag, {latest, inherit})`` → build dicts with ``build_type`` = ``"rpm"``.
+        ``listTagged(tag, {latest, inherit, package?})`` → build dicts with ``build_type`` = ``"rpm"``.
 
         Mirrors Deptopia ``getLatestBuildsTypes`` / ``GetLatestBuildsForTags``.
         ``latest=True`` gives one build per package name (same as Deptopia's default
         for errata streams); ``latest=False`` returns all historical builds in the tag.
+        When *package* is set, only that package's builds are returned.
         """
-        params = {
+        params: dict[str, Any] = {
             "latest": latest,
             "inherit": inherit,
             "__starstar": True,
         }
+        if package is not None:
+            params["package"] = package
         try:
             rows = self._call_with_retry(f"listTagged({brew_tag})", "listTagged", brew_tag, params)
         except _KOJI_ERRORS as e:
